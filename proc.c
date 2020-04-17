@@ -6,15 +6,25 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "stat.h"
+//#include "stdio.h"
+#include "syscall.h"
+struct proc* proc_for_priority_scheduler();
+struct proc* proc_for_cfs();
+void default_action(struct proc *p, struct cpu *c);
+void set_accu(struct proc* proc);
+double get_ratio(struct proc *p);
 
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
 
+
 static struct proc *initproc;
 
 int nextpid = 1;
+uint sched_type=0;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -111,8 +121,27 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
-
+  p->ps_priority=5;
+  p->retime=0;
+  p->rtime=0;
+  p->stime=0;
+  set_accu(p);
   return p;
+}
+
+void set_accu(struct proc* proc){
+  struct proc *p;
+  long long min_accu=9223372036854775807;
+  int only_me=0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state == RUNNABLE||p->state==RUNNING){
+          if(min_accu>p->accumulator)
+            min_accu=p->accumulator;
+          if(p->pid!=proc->pid)// check if there are other processes
+            only_me=1;  
+      }
+      proc->accumulator=min_accu*only_me;
+    }
 }
 
 //PAGEBREAK: 32
@@ -223,13 +252,14 @@ fork(void)
 
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
-// until its parent calls wait() to find out it exited.
+// until its parent calls wait(null) to find out it exited.
 void
-exit(void)
+exit(int status)
 {
   struct proc *curproc = myproc();
   struct proc *p;
   int fd;
+  curproc->status=status;
 
   if(curproc == initproc)
     panic("init exiting");
@@ -249,7 +279,7 @@ exit(void)
 
   acquire(&ptable.lock);
 
-  // Parent might be sleeping in wait().
+  // Parent might be sleeping in wait(null).
   wakeup1(curproc->parent);
 
   // Pass abandoned children to init.
@@ -263,6 +293,7 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+
   sched();
   panic("zombie exit");
 }
@@ -270,10 +301,11 @@ exit(void)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(void)
+wait(int *status)
 {
   struct proc *p;
   int havekids, pid;
+  int childStatus;
   struct proc *curproc = myproc();
   
   acquire(&ptable.lock);
@@ -287,6 +319,7 @@ wait(void)
       if(p->state == ZOMBIE){
         // Found one.
         pid = p->pid;
+        childStatus=p->status;
         kfree(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
@@ -295,6 +328,11 @@ wait(void)
         p->name[0] = 0;
         p->killed = 0;
         p->state = UNUSED;
+        p->status = 0;
+        
+        if(status!=null)
+          *status=childStatus;
+
         release(&ptable.lock);
         return pid;
       }
@@ -311,6 +349,27 @@ wait(void)
   }
 }
 
+int set_ps_priority(int priority){
+  if(priority<1||priority>10)
+    return -1;
+  struct proc *proc=myproc();
+  proc->ps_priority=priority;
+  return 0;
+}
+
+int set_cfs_priority(int option){
+  struct proc *proc=myproc();
+  if(option==1)
+    proc->decay_factor=0.75;
+  else if(option==2)
+    proc->decay_factor=1;
+  else if(option==3)
+    proc->decay_factor=1.25;
+  else
+    return -1;
+  return 0;
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -325,18 +384,51 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+  sched_type = 0;
   for(;;){
     // Enable interrupts on this processor.
     sti();
+    if (sched_type == 0)
+    {
+      // Loop over process table looking for process to run.
+      acquire(&ptable.lock);
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE)
+          continue;
+        default_action(p, c);
+      }
+    release(&ptable.lock);
+    }
+    if (sched_type == 1)
+    {
+      acquire(&ptable.lock);
+      p = proc_for_priority_scheduler();
+      if(p!=null)
+        default_action(p, c);
+      release(&ptable.lock);
+    }
+    if (sched_type == 2)
+    {
+      acquire(&ptable.lock);
+      p = proc_for_cfs();
+      if(p!=null)
+        default_action(p, c);
+      release(&ptable.lock);
+    }
 
-    // Loop over process table looking for process to run.
-    acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
+  }
+}
 
-      // Switch to chosen process.  It is the process's job
+double get_ratio(struct proc *p){
+  double numerator;
+  double denominator;
+  numerator = (double)(p->rtime * p->decay_factor);
+  denominator = (double)(p->rtime + p->stime + p->retime);
+  return (numerator / denominator);
+}
+
+void default_action(struct proc *p, struct cpu *c){
+  // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       c->proc = p;
@@ -349,12 +441,39 @@ scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
-    }
-    release(&ptable.lock);
-
-  }
 }
 
+struct proc* proc_for_priority_scheduler(){
+  struct proc *p;
+  struct proc *min_proc = ptable.proc;
+  long long min_accu = -1;
+  for (p = ptable.proc; p< &ptable.proc[NPROC]; p++)
+    if (p->state == RUNNABLE)
+      if (p->accumulator < min_accu || min_accu == -1)
+      {
+        min_accu = p->accumulator;
+        min_proc = p;
+      }
+  return min_proc;
+}
+
+struct proc* proc_for_cfs(){
+  struct proc *p;
+  double ratio;
+  struct proc *min_proc = ptable.proc;
+  double min_ratio = -1.0;
+  for (p = ptable.proc; p< &ptable.proc[NPROC]; p++)
+    if (p->state == RUNNABLE)
+    { 
+      ratio = get_ratio(p); 
+      if (ratio < min_ratio || min_ratio == -1.0)
+      {
+        min_ratio = ratio;
+        min_proc = p;
+      }
+    }
+  return min_proc;
+}
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -460,8 +579,10 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+    if(p->state == SLEEPING && p->chan == chan){
+      set_accu(p);
       p->state = RUNNABLE;
+  }
 }
 
 // Wake up all processes sleeping on chan.
@@ -531,4 +652,49 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int policy(int pol){
+  acquire(&ptable.lock);
+  if(pol==0){
+    sched_type=0;
+    cprintf("Policy has been successfully changed to Default Policy\n");
+    cprintf("%d",sched_type);
+  }
+  else if(pol==1){
+    sched_type=1;
+    cprintf("Policy has been successfully changed to Priority Policy\n");
+  }
+  else if(pol==2){
+    sched_type=2;
+    cprintf("Policy has been successfully changed to CFS Policy\n");
+  }
+  else{
+    cprintf("Error replacing policy, no such policy number(%d)\n",pol);
+    release(&ptable.lock);
+    return -1;
+  }
+  release(&ptable.lock);
+  return 0;
+}
+
+// this function increases the time related fields of all the processes in the system dependitg on their state
+void increase_ticks(){
+  struct proc *p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state==RUNNING)
+      p->rtime++;
+    else if(p->state==RUNNABLE)
+      p->retime++;
+    else if(p->state==SLEEPING)
+      p->stime++;
+  }
+}
+
+int proc_info(struct perf * performance){
+  performance->ps_priority=myproc()->ps_priority;
+  performance->retime=myproc()->retime;
+  performance->rtime=myproc()->rtime;
+  performance->stime=myproc()->stime;
+  return 0;
 }

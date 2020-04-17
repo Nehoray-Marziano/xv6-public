@@ -16,14 +16,20 @@ sys_fork(void)
 int
 sys_exit(void)
 {
-  exit();
+  int status;
+  if(argint(0,&status)<0)
+    return -1;
+  exit(status);
   return 0;  // not reached
 }
 
 int
 sys_wait(void)
 {
-  return wait();
+  char *status;
+  if(argptr(0,&status,4)<0)
+    return -1;
+  return wait((int*)status);
 }
 
 int
@@ -88,4 +94,35 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+int sys_memsize(void){
+  return (int)myproc()->sz;
+}
+
+int sys_set_ps_priority(void){
+  int priority;
+  if(argint(0, &priority) < 0)
+    return -1;
+  return set_ps_priority(priority);
+}
+int sys_set_cfs_priority(void){
+  int priority;
+  if(argint(0, &priority) < 0)
+    return -1;
+  return set_cfs_priority(priority);
+}
+
+int sys_policy(void){
+  int pol;
+  if(argint(0,&pol)<0)
+    return -1;
+  return policy(pol);
+}
+
+int sys_proc_info(void){
+  char * performance;
+  if(argptr(0,&performance,16)<0)
+    return -1;
+  return proc_info((struct perf*)performance);
 }
