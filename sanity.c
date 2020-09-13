@@ -11,6 +11,49 @@ int fib(int num){
     return fib(num-1)+fib(num-2);
 }
 
+int
+main(int argc, char *argv[])
+{
+    printf(1, "PID\tPS_PRIORITY\tSTIME\tRETIME\tRTIME\n");
+    if(fork()==0){
+        set_ps_priority(5);
+        set_cfs_priority(2);
+        fib(20);
+        struct perf perf;
+        proc_info(&perf);
+        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
+        exit(0);
+    }
+    if(fork()==0){
+        set_ps_priority(10);
+        set_cfs_priority(3);
+        fib(20);
+        struct perf perf;
+        proc_info(&perf);
+        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
+        exit(0);
+    }
+    if(fork()==0){
+        set_ps_priority(1);
+        set_cfs_priority(1);
+        fib(20);
+        struct perf perf;
+        proc_info(&perf);
+        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
+        exit(0);
+    }
+    wait(null);
+    wait(null);
+    wait(null);
+    struct perf perf;
+    proc_info(&perf);
+    printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
+    exit(0);
+}
+
+
+
+
 /*int
 main(int argc, char *argv[])
 {
@@ -85,43 +128,3 @@ main(int argc, char *argv[])
                 exit(0);
     }
 }*/
-
-int
-main(int argc, char *argv[])
-{
-    printf(1, "PID\tPS_PRIORITY\tSTIME\tRETIME\tRTIME\n");
-    if(fork()==0){
-        set_ps_priority(5);
-        set_cfs_priority(2);
-        fib(20);
-        struct perf perf;
-        proc_info(&perf);
-        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
-        exit(0);
-    }
-    if(fork()==0){
-        set_ps_priority(10);
-        set_cfs_priority(3);
-        fib(20);
-        struct perf perf;
-        proc_info(&perf);
-        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
-        exit(0);
-    }
-    if(fork()==0){
-        set_ps_priority(1);
-        set_cfs_priority(1);
-        fib(20);
-        struct perf perf;
-        proc_info(&perf);
-        printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
-        exit(0);
-    }
-    wait(null);
-    wait(null);
-    wait(null);
-    struct perf perf;
-    proc_info(&perf);
-    printf(1, "%d\t%d\t\t%d\t%d\t%d\n", getpid(), perf.ps_priority,perf.stime,perf.retime,perf.rtime);
-    exit(0);
-}
